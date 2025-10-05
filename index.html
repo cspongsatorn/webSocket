@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Relay 1 Control</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    #status { margin-top: 12px; }
+    button { padding: 10px 16px; margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <h2>Relay 1 Control (Box ID: <span id="boxId">1</span>)</h2>
+
+  <label>
+    Box ID:
+    <input id="inputId" type="number" value="1" min="1" style="width:60px" />
+  </label>
+
+  <div style="margin-top:12px">
+    <button id="btnOn">เปิด Relay</button>
+    <button id="btnOff">ปิด Relay</button>
+  </div>
+
+  <div id="status">สถานะ: --</div>
+
+  <script>
+    const btnOn = document.getElementById("btnOn");
+    const btnOff = document.getElementById("btnOff");
+    const statusDiv = document.getElementById("status");
+    const inputId = document.getElementById("inputId");
+
+    // helper: fetch current state
+    async function refreshState() {
+      const id = inputId.value || 1;
+      try {
+        const r = await fetch(`/api/status?id=${encodeURIComponent(id)}`);
+        const j = await r.json();
+        if (j.success) {
+          statusDiv.textContent = `สถานะ DB IO_1 = ${j.data.IO_1}`;
+        } else {
+          statusDiv.textContent = `Error: ${j.error || 'no data'}`;
+        }
+      } catch (err) {
+        statusDiv.textContent = `Fetch error: ${err.message}`;
+      }
+    }
+
+    btnOn.onclick = () => setRelay( inputId.value || 1, 1 );
+    btnOff.onclick = () => setRelay( inputId.value || 1, 0 );
+
+    async function setRelay(id, value) {
+      statusDiv.textContent = "ส่งคำสั่ง...";
+      try {
+        const res = await fetch("/api/setRelay", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: Number(id), value: Number(value) })
+        });
+        const j = await res.json();
+        if (j.success) {
+          statusDiv.textContent = "คำสั่งส่งแล้ว → รออุปกรณ์ตอบกลับ (callback)";
+        } else {
+          statusDiv.textContent = "API error: " + (j.error || "unknown");
+        }
+      } catch (err) {
+        statusDiv.textContent = "Network error: " + err.message;
+      }
+    }
+
+    // WebSocket for receiving callbacks (status) from device or server
+    const proto = (location.protocol === "https:") ? "wss:" : "ws:";
+    const wsUrl = proto + "//" + location.host; // same host:port
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      console.log("WS connected");
+      statusDiv.textContent = statusDiv.textContent + " · WS connected";
+      refreshState();
+    };
+
+    ws.onmessage = (ev) => {
+      console.log("WS msg:", ev.data);
+      try {
+        const d = JSON.parse(ev.data);
+        if (d.type === "status") {
+          statusDiv.textContent = `Callback from device: Relay -> ${d.relay} = ${d.value}`;
+          // refresh DB shown
+          refreshState();
+        } else if (d.type === "set") {
+          // server broadcast when API updated DB
+          statusDiv.textContent = `Server broadcast: set IO_1=${d.IO_1} for id=${d.id}`;
+          refreshState();
+        } else if (d.type === "connected") {
+          statusDiv.textContent = `Device connected: ${d.message || ''}`;
+        }
+      } catch (err) {
+        console.warn("Invalid JSON from WS", err);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log("WS closed");
+      statusDiv.textContent = "WS closed";
+    };
+
+    ws.onerror = (e) => {
+      console.log("WS error", e);
+    };
+
+    // on load fetch initial
+    refreshState();
+  </script>
+</body>
+</html>
