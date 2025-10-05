@@ -1,9 +1,9 @@
-import express from "express";
-import http from "http";
-import WebSocket, { WebSocketServer } from "ws";
-import mysql from "mysql2/promise";
-import path from "path";
-import { fileURLToPath } from "url";
+const express = require("express");
+const http = require("http");
+const WebSocket = require("ws");
+const mysql = require("mysql2/promise");
+const path = require("path");
+const { fileURLToPath }  = require("url");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
