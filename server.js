@@ -38,6 +38,7 @@ app.get("/api/get/:id", async (req, res) => {
 // API สำหรับอัปเดตรีเลย์
 app.post("/api/setRelay", async (req, res) => {
   const { id, value } = req.body;
+  console.log("SetRelay API:", id, value);
   await db.execute("UPDATE box SET IO_1=? WHERE id=?", [value, id]);
 
   // ส่งไปให้ ESP32 ผ่าน WS
