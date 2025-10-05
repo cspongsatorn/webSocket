@@ -1,105 +1,72 @@
-// server.js
-const express = require("express");
-const http = require("http");
-const path = require("path");
-const mysql = require("mysql2/promise");
-const { WebSocketServer } = require("ws");
+// ===== server.js =====
+import express from "express";
+import { WebSocketServer } from "ws";
+import mysql from "mysql2/promise";
+import path from "path";
+import { fileURLToPath } from "url";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "public"))); // ให้หน้าเว็บอยู่ในโฟลเดอร์ public
 
-// --------- Config (ใช้ env บน Render) ---------
-// คุณสามารถกำหนด env vars บน Render (หรือแก้ค่าด้านล่างเป็นค่าจริง)
-const DB_HOST = process.env.DB_HOST || "gateway01.ap-southeast-1.prod.aws.tidbcloud.com";
-const DB_USER = process.env.DB_USER || "3r7jSwUzoNxFYHZ.root";
-const DB_PASS = process.env.DB_PASS || "xsoDcx5QsE01vL4M";
-const DB_NAME = process.env.DB_NAME || "test";
-const DB_PORT = process.env.DB_PORT ? Number(process.env.DB_PORT) : 4000;
-
-// Create pool with ssl option as you provided
-const pool = mysql.createPool({
-  host: DB_HOST,
-  user: DB_USER,
-  password: DB_PASS,
-  database: DB_NAME,
-  port: DB_PORT,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  ssl: { rejectUnauthorized: true }
+// ✅ ตั้งค่าฐานข้อมูล TiDB (ข้อมูลของคุณ)
+const db = await mysql.createConnection({
+  host: "gateway01.ap-southeast-1.prod.aws.tidbcloud.com",
+  user: "3r7jSwUzoNxFYHZ.root",
+  password: "xsoDcx5QsE01vL4M",
+  database: "test",
+  port: 4000,
+  ssl: { rejectUnauthorized: true },
 });
 
-// --------- static page ---------
-app.use(express.static(path.join(__dirname)));
-
-// GET status (read id + IO_1)
-app.get("/api/status", async (req, res) => {
-  const id = req.query.id || 1;
-  try {
-    const [rows] = await pool.query("SELECT ID, IO_1 FROM box WHERE ID = ?", [id]);
-    if (!rows || rows.length === 0) return res.status(404).json({ success: false, error: "not found" });
-    res.json({ success: true, data: rows[0] });
-  } catch (err) {
-    console.error("DB get error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
+// ✅ API สำหรับอ่านสถานะรีเลย์
+app.get("/api/get/:id", async (req, res) => {
+  const [rows] = await db.execute("SELECT * FROM box WHERE id = ?", [req.params.id]);
+  res.json(rows[0] || {});
 });
 
-// POST setRelay { id, value }
-app.post("/api/setRelay", async (req, res) => {
-  const { id, value } = req.body;
-  if (!id) return res.status(400).json({ success: false, error: "id required" });
-  const v = value ? 1 : 0;
-  try {
-    const [result] = await pool.query("UPDATE box SET IO_1 = ? WHERE ID = ?", [v, id]);
-    // broadcast WS message to connected clients (ESP32 + web clients)
-    const msg = JSON.stringify({ type: "set", id: id, IO_1: v });
-    wss && wss.clients.forEach(c => { if (c.readyState === 1) c.send(msg); });
+// ✅ API สำหรับตั้งค่า IO_1 แล้ว broadcast ไปยัง WebSocket clients
+app.post("/api/set", async (req, res) => {
+  const { id, io_1 } = req.body;
+  await db.execute("UPDATE box SET IO_1=? WHERE id=?", [io_1, id]);
 
-    res.json({ success: true, updated: result.affectedRows || 0 });
-  } catch (err) {
-    console.error("DB update error:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
+  // Broadcast ข้อมูลไปให้ ESP32 ทั้งหมด
+  const payload = JSON.stringify({ type: "set", id, io_1 });
+  wss.clients.forEach((client) => {
+    if (client.readyState === 1) client.send(payload);
+  });
+
+  res.json({ success: true, sent: payload });
 });
 
-// --------- start HTTP + attach WS (same port) ---------
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
-const server = http.createServer(app);
+// ✅ เริ่ม HTTP + WebSocket server
+const PORT = process.env.PORT || 3000;
+const server = app.listen(PORT, () => {
+  console.log("✅ HTTP + WSS listening on port", PORT);
+});
 
-// create WSS and attach via upgrade
-const wss = new WebSocketServer({ noServer: true });
-
+// ✅ WebSocket ส่วนนี้รองรับ ESP32 และหน้าเว็บแบบ real-time
+const wss = new WebSocketServer({ server });
 wss.on("connection", (ws, req) => {
-  console.log("WS client connected:", req.socket.remoteAddress);
+  console.log("⚡ WS client connected:", req.socket.remoteAddress);
 
-  ws.on("message", (message) => {
-    console.log("WS message from client:", message.toString());
-    // If device (ESP32) sends status callback, forward to web clients
+  ws.on("message", (msg) => {
+    console.log("📩 Message:", msg.toString());
+
+    // ถ้า ESP32 ส่ง callback กลับมา
     try {
-      const data = JSON.parse(message.toString());
-      if (data.type === "status") {
-        // forward to all web clients (including web UI)
-        const out = JSON.stringify(data);
-        wss.clients.forEach(c => { if (c.readyState === 1) c.send(out); });
+      const data = JSON.parse(msg);
+      if (data.type === "callback") {
+        // broadcast กลับไปหน้าเว็บ
+        wss.clients.forEach((client) => {
+          if (client.readyState === 1) client.send(JSON.stringify(data));
+        });
       }
     } catch (err) {
-      console.warn("Invalid WS payload:", err);
+      console.error("❌ JSON parse error", err);
     }
   });
 
-  ws.on("close", () => {
-    console.log("WS client closed");
-  });
-});
-
-server.on("upgrade", (request, socket, head) => {
-  // Accept all upgrades to wss — path check possible if you want
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit("connection", ws, request);
-  });
-});
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`HTTP server and WSS listening on port ${PORT}`);
+  ws.on("close", () => console.log("❌ WS client closed"));
 });
