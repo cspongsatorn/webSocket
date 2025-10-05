@@ -1,43 +1,41 @@
 <!DOCTYPE html>
-<html lang="th">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Relay Control</title>
   <style>
-    body { font-family: sans-serif; padding: 2rem; text-align: center; }
-    button { padding: 10px 20px; margin: 10px; font-size: 1.2rem; }
-    #status { margin-top: 20px; }
+    body { font-family: sans-serif; text-align: center; margin-top: 40px; }
+    button { padding: 10px 20px; font-size: 18px; margin: 10px; cursor: pointer; }
   </style>
 </head>
 <body>
-  <h1>🌐 Relay Control Panel</h1>
-  <select id="deviceId">
-    <option value="1">Device ID 1</option>
-    <option value="2">Device ID 2</option>
-  </select>
-  <br>
-  <button onclick="toggleRelay(1)">🔘 Toggle Relay 1</button>
-  <div id="status">Status: Waiting...</div>
+  <h1>Relay 1 Control</h1>
+  <button id="on">ON</button>
+  <button id="off">OFF</button>
+  <p id="status">Status: —</p>
 
   <script>
-    const ws = new WebSocket(`wss://${location.host}`);
-    ws.onopen = () => document.getElementById('status').innerText = "✅ WebSocket connected!";
-    ws.onmessage = (msg) => {
-      const data = JSON.parse(msg.data);
+    const statusEl = document.getElementById("status");
+
+    const ws = new WebSocket("wss://" + window.location.host);
+    ws.onopen = () => statusEl.textContent = "Status: WebSocket Connected ✅";
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
       if (data.type === "callback") {
-        document.getElementById('status').innerText = `⚡ Callback: Relay ${data.io_1 ? 'ON' : 'OFF'}`;
+        statusEl.textContent = `Relay ${data.relay} ${data.value ? "ON" : "OFF"}`;
       }
     };
 
-    async function toggleRelay(value) {
-      const id = document.getElementById("deviceId").value;
-      const newValue = Math.random() > 0.5 ? 1 : 0;
-      await fetch("/api/set", {
+    async function setRelay(value) {
+      await fetch("/api/setRelay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, io_1: newValue })
+        body: JSON.stringify({ id: 1, value })
       });
     }
+
+    document.getElementById("on").onclick = () => setRelay(1);
+    document.getElementById("off").onclick = () => setRelay(0);
   </script>
 </body>
 </html>
